@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>WebAR — GLB Placement Debug</title>
+  <title>WebAR — GLB Placement Fixed</title>
 
   <!-- Three pinned for MindAR compatibility -->
   <script type="importmap">
@@ -52,7 +52,6 @@
     const FIT_MODE   = 'max';         // 'width' | 'height' | 'max'
     const FIT_SIZE_M = 0.6;
     const MODEL_LIFT = 0.02;
-    const ROT_FIX    = { x: -Math.PI/2, y: 0, z: 0 };
     // ==================
 
     const debugEl = document.getElementById('debug');
@@ -74,8 +73,7 @@
     const mindar = new MindARThree({
       container,
       imageTargetSrc: './targets.mind',
-      uiLoading:'no', uiScanning:'no', uiError:'no',
-      warmupTolerance: 2, missTolerance: 8
+      uiLoading:'no', uiScanning:'no', uiError:'no'
     });
     const { renderer, scene, camera } = mindar;
     renderer.setClearColor(0x000000, 0);
@@ -88,23 +86,9 @@
     dir.position.set(1,2,1);
     scene.add(dir);
 
-    // Big axes to orient you
+    // Debug axes
     const axes = new THREE.AxesHelper(0.5);
-    axes.position.set(0,0,-0.5);
     scene.add(axes);
-
-    // World root (model stays here after first scan)
-    const worldRoot = new THREE.Group();
-    scene.add(worldRoot);
-
-    // Tall beacon so you can’t miss the spot
-    const beacon = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.03,0.03,2.0,16),
-      new THREE.MeshBasicMaterial({ color: 0xff00ff })
-    );
-    beacon.position.y = 1.0;
-    beacon.visible = false;
-    worldRoot.add(beacon);
 
     // Anchor
     const anchor = mindar.addAnchor(0);
@@ -132,7 +116,7 @@
     }
     function centerByBounds(object){
       const box = new THREE.Box3().setFromObject(object);
-      if (!isFinite(box.min.x)) return; // empty scene
+      if (!isFinite(box.min.x)) return;
       const center = box.getCenter(new THREE.Vector3());
       object.position.sub(center);
       object.updateMatrixWorld(true);
@@ -148,38 +132,18 @@
       object.scale.multiplyScalar(scale);
       object.updateMatrixWorld(true);
     }
-    function addGreenBoxHelper(object){
-      const box = new THREE.Box3().setFromObject(object);
-      if (!isFinite(box.min.x)) return;
-      object.add(new THREE.Box3Helper(box, 0x00ff00));
-    }
-    function lockWorldFromAnchor(anchorGroup, targetGroup){
-      const p=new THREE.Vector3(), q=new THREE.Quaternion();
-      anchorGroup.updateWorldMatrix(true, true);
-      anchorGroup.getWorldPosition(p);
-      anchorGroup.getWorldQuaternion(q);
-      targetGroup.position.copy(p);
-      targetGroup.quaternion.copy(q);
-      targetGroup.scale.set(1,1,1);
-      targetGroup.updateMatrixWorld(true);
-    }
 
     async function loadModel(){
       if (modelPrefab) return;
       updateDebug('model: loading…');
-      console.log('Loading GLB:', MODEL_URL);
       await new Promise((resolve,reject)=>{
         gltfLoader.load(
           MODEL_URL,
-          (gltf)=>{ modelPrefab = gltf.scene; makeRenderable(modelPrefab); updateDebug('model: loaded ✓'); console.log('GLB loaded ✓'); resolve(); },
+          (gltf)=>{ modelPrefab = gltf.scene; makeRenderable(modelPrefab); updateDebug('model: loaded ✓'); resolve(); },
           (xhr)=>{ if (xhr.total){ hint.textContent = `Loading model… ${Math.round((xhr.loaded/xhr.total)*100)}%`; } },
           (err)=>{ updateDebug('model: ERROR (see console)'); console.error('Model load error:', err); hint.textContent='Failed to load model'; reject(err); }
         );
       });
-      // Warn if GLB had no meshes
-      let hasMesh=false;
-      modelPrefab.traverse(o=>{ if(o.isMesh) hasMesh=true; });
-      if(!hasMesh){ console.warn('GLB has no meshes (empty nodes only).'); }
     }
 
     function showRescuePreview(seconds=4){
@@ -188,7 +152,6 @@
       rescuePreview = modelPrefab.clone(true);
       centerByBounds(rescuePreview);
       fitByBounds(rescuePreview, FIT_MODE, FIT_SIZE_M);
-      rescuePreview.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
       rescuePreview.position.set(0, -0.05, -0.8);
       camera.add(rescuePreview);
       setTimeout(()=>{ if(rescuePreview){ camera.remove(rescuePreview); rescuePreview=null; } }, seconds*1000);
@@ -198,39 +161,33 @@
       const mat = new THREE.MeshStandardMaterial({ color: 0xff00ff, metalness:0, roughness:0.4 });
       const cube = new THREE.Mesh(new THREE.BoxGeometry(0.2,0.2,0.2), mat);
       cube.position.y = 0.1 + MODEL_LIFT;
-      worldRoot.add(cube);
-      beacon.visible = true;
+      anchor.group.add(cube); // attached to anchor
       return cube;
     }
 
     // Anchor events
     anchor.onTargetFound = async ()=>{
+      console.log("Target FOUND");
       hint.textContent = 'Tracking ✓';
       if (spawned) return;
 
-      await loadModel().catch(()=>{ /* still let Test Cube work */ });
-
-      lockWorldFromAnchor(anchor.group, worldRoot);
+      await loadModel().catch(()=>{});
 
       if (modelPrefab){
         placedInstance = modelPrefab.clone(true);
         centerByBounds(placedInstance);
         fitByBounds(placedInstance, FIT_MODE, FIT_SIZE_M);
-        placedInstance.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
         placedInstance.position.y += MODEL_LIFT;
-        addGreenBoxHelper(placedInstance);
-        worldRoot.add(placedInstance);
-        console.log('Model placed ✓');
-      } else {
-        console.warn('No modelPrefab — use Test Cube or fix GLB path.');
+        anchor.group.add(placedInstance); // attach directly to anchor
+        console.log('Model attached to anchor ✓');
       }
 
-      beacon.visible = true;
       spawned = true;
       hint.textContent = 'Placed ✓ You can move away.';
     };
 
     anchor.onTargetLost = ()=>{
+      console.log("Target LOST");
       hint.textContent = spawned ? 'Model placed — move around freely' : 'Move back to the target…';
     };
 
@@ -253,9 +210,8 @@
     restartBtn.addEventListener('click', async ()=>{
       try { await mindar.stop(); } catch {}
       renderer.setAnimationLoop(null);
-      worldRoot.clear(); worldRoot.add(beacon);
-      beacon.visible = false;
-      placedInstance = null; spawned = false;
+      spawned = false;
+      placedInstance = null;
       await mindar.start();
       renderer.setAnimationLoop(()=>renderer.render(scene, camera));
       hint.textContent = 'Point your camera at the target image';
@@ -267,9 +223,8 @@
     });
 
     cubeBtn.addEventListener('click', ()=>{
-      lockWorldFromAnchor(anchor.group, worldRoot);
       spawnTestCube();
-      hint.textContent = 'Test Cube spawned at placement';
+      hint.textContent = 'Test Cube spawned at anchor';
     });
 
     // Resize
