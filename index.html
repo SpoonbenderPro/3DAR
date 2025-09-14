@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <title>WebAR — GLB Placement Fixed</title>
+  <title>WebAR — GLB Placement Debug (Fixed)</title>
 
   <!-- Three pinned for MindAR compatibility -->
   <script type="importmap">
@@ -25,6 +25,8 @@
     #ui{position:fixed;left:12px;right:12px;bottom:12px;z-index:4;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
     button,a.button{padding:10px 14px;border:0;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;background:#4f46e5;color:#fff;text-decoration:none}
     button.secondary{background:#374151}
+    /* hide any stray <video> elements that might overlay the canvas */
+    video { display:none !important; }
   </style>
 </head>
 <body>
@@ -49,9 +51,11 @@
     // ===== CONFIG =====
     const CTA_URL    = 'https://example.com';
     const MODEL_URL  = './model.glb'; // must sit next to this file
+    const TARGETS    = './targets.mind';
     const FIT_MODE   = 'max';         // 'width' | 'height' | 'max'
     const FIT_SIZE_M = 0.6;
     const MODEL_LIFT = 0.02;
+    const ROT_FIX    = { x: -Math.PI/2, y: 0, z: 0 }; // common GLB fix
     // ==================
 
     const debugEl = document.getElementById('debug');
@@ -72,13 +76,15 @@
     // MindAR + THREE
     const mindar = new MindARThree({
       container,
-      imageTargetSrc: './targets.mind',
-      uiLoading:'no', uiScanning:'no', uiError:'no'
+      imageTargetSrc: TARGETS,
+      uiLoading:'no', uiScanning:'no', uiError:'no',
+      warmupTolerance: 2, missTolerance: 8
     });
     const { renderer, scene, camera } = mindar;
     renderer.setClearColor(0x000000, 0);
     renderer.domElement.style.touchAction = 'none';
     camera.near = 0.01; camera.far = 500; camera.updateProjectionMatrix();
+    renderer.setSize(container.clientWidth, container.clientHeight, false);
 
     // Lights
     scene.add(new THREE.AmbientLight(0xffffff, 1.0));
@@ -86,12 +92,12 @@
     dir.position.set(1,2,1);
     scene.add(dir);
 
-    // Debug axes
-    const axes = new THREE.AxesHelper(0.5);
-    scene.add(axes);
-
     // Anchor
     const anchor = mindar.addAnchor(0);
+
+    // Add visible axes on anchor so you can see where anchor is
+    const anchorAxes = new THREE.AxesHelper(0.2);
+    anchor.group.add(anchorAxes);
 
     // GLB loader
     const gltfLoader = new GLTFLoader();
@@ -107,10 +113,16 @@
 
     function makeRenderable(object){
       object.traverse(o=>{
+        // avoid frustum cull hiding small objects
         o.frustumCulled = false;
         if (o.isMesh && o.material){
+          // ensure double-sided so model isn't invisible from the camera side
           const mats = Array.isArray(o.material)? o.material : [o.material];
-          mats.forEach(m=>{ m.side = THREE.DoubleSide; if('toneMapped' in m) m.toneMapped = true; });
+          mats.forEach(m=>{
+            m.side = THREE.DoubleSide;
+            if('toneMapped' in m) m.toneMapped = true;
+            // if the material is black, we keep it — changing materials may break textures
+          });
         }
       });
     }
@@ -136,10 +148,17 @@
     async function loadModel(){
       if (modelPrefab) return;
       updateDebug('model: loading…');
+      console.log('Loading GLB:', MODEL_URL);
       await new Promise((resolve,reject)=>{
         gltfLoader.load(
           MODEL_URL,
-          (gltf)=>{ modelPrefab = gltf.scene; makeRenderable(modelPrefab); updateDebug('model: loaded ✓'); resolve(); },
+          (gltf)=>{
+            modelPrefab = gltf.scene;
+            makeRenderable(modelPrefab);
+            updateDebug('model: loaded ✓');
+            console.log('GLB loaded ✓', modelPrefab);
+            resolve();
+          },
           (xhr)=>{ if (xhr.total){ hint.textContent = `Loading model… ${Math.round((xhr.loaded/xhr.total)*100)}%`; } },
           (err)=>{ updateDebug('model: ERROR (see console)'); console.error('Model load error:', err); hint.textContent='Failed to load model'; reject(err); }
         );
@@ -152,15 +171,17 @@
       rescuePreview = modelPrefab.clone(true);
       centerByBounds(rescuePreview);
       fitByBounds(rescuePreview, FIT_MODE, FIT_SIZE_M);
+      // try the rotation fix in preview so you can validate orientation
+      rescuePreview.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
       rescuePreview.position.set(0, -0.05, -0.8);
       camera.add(rescuePreview);
       setTimeout(()=>{ if(rescuePreview){ camera.remove(rescuePreview); rescuePreview=null; } }, seconds*1000);
     }
 
-    function spawnTestCube(){
+    function spawnTestCubeAtAnchor(){
       const mat = new THREE.MeshStandardMaterial({ color: 0xff00ff, metalness:0, roughness:0.4 });
       const cube = new THREE.Mesh(new THREE.BoxGeometry(0.2,0.2,0.2), mat);
-      cube.position.y = 0.1 + MODEL_LIFT;
+      cube.position.set(0, 0.1 + MODEL_LIFT, 0);
       anchor.group.add(cube); // attached to anchor
       return cube;
     }
@@ -169,21 +190,35 @@
     anchor.onTargetFound = async ()=>{
       console.log("Target FOUND");
       hint.textContent = 'Tracking ✓';
+      updateDebug(`model: ${modelPrefab?'loaded':'idle'}`);
       if (spawned) return;
 
+      // ensure model loaded
       await loadModel().catch(()=>{});
+
+      // spawn debug helper cube (always)
+      const debugCube = spawnTestCubeAtAnchor();
+      debugCube.name = 'DEBUG_CUBE_MAGENTA';
+      console.log('Debug cube added to anchor');
 
       if (modelPrefab){
         placedInstance = modelPrefab.clone(true);
+        // center + fit
         centerByBounds(placedInstance);
         fitByBounds(placedInstance, FIT_MODE, FIT_SIZE_M);
-        placedInstance.position.y += MODEL_LIFT;
+        // apply a safe rotation (many exporters need -90deg)
+        placedInstance.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
+        // make sure visible and put a small lift above the plane
+        placedInstance.position.set(0, MODEL_LIFT, 0);
+        placedInstance.visible = true;
         anchor.group.add(placedInstance); // attach directly to anchor
-        console.log('Model attached to anchor ✓');
+        console.log('Model attached to anchor ✓', placedInstance);
+      } else {
+        console.warn('Model prefab missing — only debug cube placed');
       }
 
       spawned = true;
-      hint.textContent = 'Placed ✓ You can move away.';
+      hint.textContent = 'Placed ✓ Move away to test';
     };
 
     anchor.onTargetLost = ()=>{
@@ -210,6 +245,10 @@
     restartBtn.addEventListener('click', async ()=>{
       try { await mindar.stop(); } catch {}
       renderer.setAnimationLoop(null);
+      // clear anchor children (keeps anchor.group reference)
+      while(anchor.group.children.length) anchor.group.remove(anchor.group.children[0]);
+      // re-add axes so you can always see orientation after restart
+      anchor.group.add(anchorAxes);
       spawned = false;
       placedInstance = null;
       await mindar.start();
@@ -223,12 +262,17 @@
     });
 
     cubeBtn.addEventListener('click', ()=>{
-      spawnTestCube();
+      spawnTestCubeAtAnchor();
       hint.textContent = 'Test Cube spawned at anchor';
     });
 
     // Resize
     new ResizeObserver(()=>renderer.setSize(container.clientWidth, container.clientHeight, false)).observe(container);
+
+    // -- helpful console reminder
+    console.log('%cWebAR debug helper loaded','color:cyan;font-weight:700');
+    console.log('Make sure: 1) model.glb and targets.mind are in the same folder as this HTML file');
+    console.log('2) You run via local server (file:// usually blocks requests).');
   </script>
 </body>
 </html>
