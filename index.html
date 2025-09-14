@@ -1,121 +1,276 @@
-<!DOCTYPE html>
-<html>
+<!doctype html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content='width=device-width, height=device-height, initial-scale=1.0, user-scalable=no, shrink-to-fit=yes'>
-    <title>Unity WebGL Player | Image_WebAR</title>
-    <link rel="stylesheet" href="TemplateData/style.css">
-    <style>
-         html{
-            height: -webkit-fill-available;
-        }
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>WebAR — Place GLB (with Beacons & Ping)</title>
 
-        body {
-            margin: 0;
-            padding: 0;
-            min-height: 100vh;
-            min-height: -webkit-fill-available;
-            width: 100vw;
-            overflow: hidden;
-        }
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/",
+      "mindar-image-three": "https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.js"
+    }
+  }
+  </script>
 
-        .ctaDiv {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            position: absolute;
-            left: 0;
-            right: 0;
-            top: 0;
-            bottom: 0;
-            background: #fffa;
-            z-index: 99;
-        }
-    </style>
-
+  <style>
+    html,body{margin:0;height:100%;background:#000;overflow:hidden;font-family:system-ui,Segoe UI,Roboto,Arial,sans-serif}
+    #container{position:fixed;inset:0}
+    #container video{position:fixed;inset:0;width:100%;height:100%;object-fit:cover;z-index:0}
+    #container canvas{position:fixed;inset:0;z-index:1}
+    #hint{position:fixed;left:0;right:0;top:10px;text-align:center;color:#fff;opacity:.95;z-index:3}
+    #ui{position:fixed;left:12px;right:12px;bottom:12px;z-index:4;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
+    button,a.button{padding:10px 14px;border:0;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;background:#4f46e5;color:#fff;text-decoration:none}
+    button.secondary{background:#374151}
+  </style>
 </head>
 <body>
-    <script src="app.js" type="text/javascript"></script>
-    <!--IMAGETARGETS-->
-    <div id="startWebcamDiv" class="ctaDiv">
-        <p style="text-align: center; width:60vw">This augmented reality experience requires access to your device's camera</p>
-        <button id="startCameraBtn" onclick="StartCamera()" style="display:none">ALLOW ACCESS</button>
-    </div>
-    <div id="startWebcamManuallyDiv" style="display: none" class="ctaDiv">
-        <button onclick="StartCameraManually()" style="width:180px; height:40px; border:1px solid gray; border-radius:8px">START WEBCAM</button>
-    </div>
+  <div id="hint">Press Start AR</div>
+  <div id="container"></div>
 
-    <div id="unity-container" class="unity-desktop">
-        <canvas id="unity-canvas" style="width: 100%; height: 100%; background: #0000; z-index: -99"></canvas>
-        <div id="unity-loading-bar">
-            <div id="unity-logo"></div>
-            <div id="unity-progress-bar-empty">
-                <div id="unity-progress-bar-full"></div>
-            </div>
-        </div>
-    </div>
-    <script src="Build/v0.1.loader.js"></script>
-    <script>
-            var container = document.querySelector("#unity-container");
-            var canvas = document.querySelector("#unity-canvas");
-            var loadingBar = document.querySelector("#unity-loading-bar");
-            var progressBarFull = document.querySelector("#unity-progress-bar-full");
+  <div id="ui">
+    <button id="startBtn">Start AR</button>
+    <button id="restartBtn" class="secondary">Restart</button>
+    <button id="pingBtn" class="secondary">Ping (show in front)</button>
+    <a id="ctaBtn" class="button" href="#" target="_blank" rel="noopener">Visit Site</a>
+  </div>
 
-            if (/iPhone|iPad|iPod|Android/i.test(navigator.userAgent)) {
-                container.className = "unity-mobile";
-            }
+  <script type="module">
+    import * as THREE from 'three';
+    import { MindARThree } from 'mindar-image-three';
+    import { GLTFLoader }  from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 
-            function StartCamera() {
-                canvas.style.width = window.innerWidth + "px";
-                canvas.style.height = window.innerHeight + "px";
-                
-                document.getElementById("startWebcamDiv").style.display = "none";
+    // ======== CONFIG (edit as needed) ========
+    const CTA_URL    = 'https://example.com';
+    const MODEL_URL  = './model.glb';     // put model.glb next to index.html
+    const FIT_MODE   = 'max';              // 'width' | 'height' | 'max'
+    const FIT_SIZE_M = 0.6;                // meters along FIT_MODE axis
+    const MODEL_LIFT = 0.02;               // raise above the image
+    const ROT_FIX    = { x: -Math.PI/2, y: 0, z: 0 }; // common: lay model upright
+    // =========================================
 
-                createUnityInstance(document.querySelector("#unity-canvas"), {
-                    dataUrl: "Build/v0.1.data.br",
-                    frameworkUrl: "Build/v0.1.framework.js.br",
-                    codeUrl: "Build/v0.1.wasm.br",
-                    streamingAssetsUrl: "StreamingAssets",
-                    companyName: "DefaultCompany",
-                    productName: "Image_WebAR",
-                    productVersion: "0.1.0",
-                    //webglContextAttributes: { "preserveDrawingBuffer": true },
-                    // matchWebGLToCanvasSize: false, // Uncomment this to separately control WebGL canvas render size and DOM element size.
-                    // devicePixelRatio: 1, // Uncomment this to override low DPI rendering on high DPI displays.
-                    },
-                    (progress) => {
-                        progressBarFull.style.width = 100 * progress + "%";
-                    }
-                ).then((unityInstance) => {
-                    window.gameInstance = unityInstance;
-                    window.unityInstance = unityInstance;
-                    window.iTracker.startWebcam();
+    document.getElementById('ctaBtn').href = CTA_URL;
 
-                    //[FIX]: some browsers (such as Wechat) does not allow webcam autoplay so we need to start the webcam manually via new button press
-                    window.waitForVideo = () => {
-                        setTimeout(() => {
-                            if (!window.iTracker.VIDEO) {
-                                window.waitForVideo();
-                            }
-                            else if (window.iTracker.VIDEO.currentTime <= 0) {
-                                document.getElementById("startWebcamManuallyDiv").style.display = "flex";
-                            }
-                        }, 2500)
-                    };
-                    window.waitForVideo();
+    const container  = document.getElementById('container');
+    const startBtn   = document.getElementById('startBtn');
+    const restartBtn = document.getElementById('restartBtn');
+    const pingBtn    = document.getElementById('pingBtn');
+    const hint       = document.getElementById('hint');
 
-                    loadingBar.style.display = "none";
-                });
+    const mindar = new MindARThree({
+      container,
+      imageTargetSrc: './targets.mind',
+      uiLoading:'no', uiScanning:'no', uiError:'no',
+      warmupTolerance: 2, missTolerance: 8
+    });
+    const { renderer, scene, camera } = mindar;
+    renderer.setClearColor(0x000000, 0);
+    renderer.domElement.style.touchAction = 'none';
 
-                loadingBar.style.display = "block";
-            }
+    // Ensure generous clipping planes so things don’t disappear
+    camera.near = 0.01;
+    camera.far  = 200.0;
+    camera.updateProjectionMatrix();
 
-            function StartCameraManually() {
-                document.getElementById("startWebcamManuallyDiv").style.display = "none";
-                iTracker.VIDEO.play()
-            }
+    // Lights
+    scene.add(new THREE.AmbientLight(0xffffff, 0.95));
+    const dir = new THREE.DirectionalLight(0xffffff, 0.9);
+    dir.position.set(1, 2, 1);
+    scene.add(dir);
 
-    </script>
+    // Debug axes in scene (optional small)
+    const sceneAxes = new THREE.AxesHelper(0.25);
+    sceneAxes.position.set(0,0,-0.5);
+    scene.add(sceneAxes);
+
+    // Anchor (we read its pose once)
+    const anchor = mindar.addAnchor(0);
+
+    // World-space pivot where placed model lives
+    const worldRoot = new THREE.Group();
+    scene.add(worldRoot);
+
+    // Add a tall beacon at worldRoot so it’s visible from afar
+    const beaconMat = new THREE.MeshBasicMaterial({ color: 0xff0077 });
+    const beacon = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.0, 16), beaconMat);
+    beacon.position.y = 1.0; // so it rises 1m above placement
+    beacon.visible = false;  // will show after placement
+    worldRoot.add(beacon);
+
+    // Load model
+    const gltfLoader = new GLTFLoader();
+    const draco = new DRACOLoader();
+    draco.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+    draco.setDecoderConfig({ type: 'js' });
+    gltfLoader.setDRACOLoader(draco);
+
+    let modelPrefab = null;
+    let placedInstance = null;
+    let spawned = false;
+    let rescuePreview = null;
+
+    function makeRenderable(object){
+      object.traverse((o)=>{
+        o.frustumCulled = false;
+        if (o.isMesh && o.material){
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          mats.forEach(m=>{ m.side = THREE.DoubleSide; if ('toneMapped' in m) m.toneMapped = true; });
+        }
+      });
+    }
+    function centerByBounds(object){
+      const box = new THREE.Box3().setFromObject(object);
+      const center = box.getCenter(new THREE.Vector3());
+      object.position.sub(center);
+      object.updateMatrixWorld(true);
+    }
+    function fitByBounds(object, mode, desired){
+      const box = new THREE.Box3().setFromObject(object);
+      const s = box.getSize(new THREE.Vector3());
+      let current = s.x;
+      if (mode==='height') current = s.y;
+      if (mode==='max') current = Math.max(s.x, s.y, s.z);
+      const scale = (current > 1e-6) ? (desired / current) : 1;
+      object.scale.multiplyScalar(scale);
+      object.updateMatrixWorld(true);
+    }
+    function lockWorldFromAnchor(anchorGroup, targetGroup){
+      const p=new THREE.Vector3(), q=new THREE.Quaternion(), s=new THREE.Vector3();
+      anchorGroup.updateWorldMatrix(true, true);
+      anchorGroup.getWorldPosition(p);
+      anchorGroup.getWorldQuaternion(q);
+      // ignore anchor scale for stability
+      targetGroup.position.copy(p);
+      targetGroup.quaternion.copy(q);
+      targetGroup.scale.set(1,1,1);
+      targetGroup.updateMatrixWorld(true);
+    }
+    function modelCenterWorld(obj){
+      const box = new THREE.Box3().setFromObject(obj);
+      const c = box.getCenter(new THREE.Vector3());
+      return c;
+    }
+    function isInView(worldPoint, cam){
+      const proj = worldPoint.clone().project(cam);
+      const inScreen = proj.x >= -1 && proj.x <= 1 && proj.y >= -1 && proj.y <= 1 && proj.z >= -1 && proj.z <= 1;
+      return inScreen;
+    }
+
+    async function loadModel(){
+      if (modelPrefab) return;
+      await new Promise((resolve, reject)=>{
+        gltfLoader.load(
+          MODEL_URL,
+          (gltf)=>{
+            modelPrefab = gltf.scene;
+            makeRenderable(modelPrefab);
+            console.log('GLB loaded ✓');
+            resolve();
+          },
+          (xhr)=>{
+            const pct = xhr.total ? Math.round((xhr.loaded/xhr.total)*100) : null;
+            if (pct!==null) hint.textContent = `Loading model… ${pct}%`;
+          },
+          (err)=>{ console.error('Model load error:', err); hint.textContent='Failed to load model'; reject(err); }
+        );
+      });
+    }
+
+    function addBoxHelperTo(object){
+      const box = new THREE.Box3().setFromObject(object);
+      const helper = new THREE.Box3Helper(box, 0x00ff00);
+      object.add(helper);
+    }
+
+    function showRescuePreview(seconds=3){
+      // brief copy in front of camera so user sees it regardless of placement
+      if (!modelPrefab) return;
+      if (rescuePreview) camera.remove(rescuePreview);
+      rescuePreview = modelPrefab.clone(true);
+      centerByBounds(rescuePreview);
+      fitByBounds(rescuePreview, FIT_MODE, FIT_SIZE_M);
+      rescuePreview.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
+      rescuePreview.position.set(0, -0.05, -0.8);
+      camera.add(rescuePreview);
+      setTimeout(()=>{ if (rescuePreview){ camera.remove(rescuePreview); rescuePreview=null; } }, seconds*1000);
+    }
+
+    // Anchor events
+    anchor.onTargetFound = async ()=>{
+      hint.textContent = 'Tracking ✓';
+      if (spawned) return;
+      await loadModel();
+
+      lockWorldFromAnchor(anchor.group, worldRoot);
+
+      placedInstance = modelPrefab.clone(true);
+      centerByBounds(placedInstance);
+      fitByBounds(placedInstance, FIT_MODE, FIT_SIZE_M);
+      placedInstance.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
+      placedInstance.position.y += MODEL_LIFT;
+
+      addBoxHelperTo(placedInstance);
+      worldRoot.add(placedInstance);
+
+      // turn on the tall beacon so you can spot the placement from far away
+      beacon.visible = true;
+
+      spawned = true;
+      hint.textContent = 'Placed ✓ You can move away.';
+
+      // If the placed model center isn’t in view, ping a rescue preview
+      const c = modelCenterWorld(placedInstance);
+      if (!isInView(c, camera)){
+        console.log('Placed model not in current view → showing rescue preview');
+        showRescuePreview(4);
+      }
+    };
+
+    anchor.onTargetLost = ()=>{
+      hint.textContent = spawned ? 'Model placed — move around freely' : 'Move back to the target…';
+    };
+
+    // Buttons
+    startBtn.addEventListener('click', async ()=>{
+      startBtn.disabled = true; startBtn.textContent = 'Starting…';
+      try{
+        await mindar.start();
+        renderer.setAnimationLoop(()=>renderer.render(scene, camera));
+        startBtn.textContent = 'Running…';
+        hint.textContent = 'Scan the image target…';
+      }catch(e){
+        console.error(e);
+        startBtn.disabled = false; startBtn.textContent = 'Start AR (Retry)';
+        hint.textContent = 'Start failed — check camera permission';
+      }
+    });
+
+    restartBtn.addEventListener('click', async ()=>{
+      try { await mindar.stop(); } catch {}
+      renderer.setAnimationLoop(null);
+
+      worldRoot.clear();
+      worldRoot.add(beacon);
+      beacon.visible = false;
+      placedInstance = null;
+      spawned = false;
+
+      await mindar.start();
+      renderer.setAnimationLoop(()=>renderer.render(scene, camera));
+      hint.textContent = 'Point your camera at the target image';
+    });
+
+    // Manual “Ping” to show a copy in front of camera any time
+    pingBtn.addEventListener('click', async ()=>{
+      await loadModel();
+      showRescuePreview(4);
+    });
+
+    // Resize
+    new ResizeObserver(()=>renderer.setSize(container.clientWidth, container.clientHeight, false)).observe(container);
+  </script>
 </body>
 </html>
