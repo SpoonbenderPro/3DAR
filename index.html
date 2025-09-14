@@ -5,6 +5,9 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>WebAR — GLB Placement Debug (Fixed)</title>
 
+  <!-- MindAR CSS (positions the camera video correctly) -->
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/mind-ar@1.2.5/dist/mindar-image-three.prod.css">
+
   <!-- Three pinned for MindAR compatibility -->
   <script type="importmap">
   {
@@ -25,8 +28,17 @@
     #ui{position:fixed;left:12px;right:12px;bottom:12px;z-index:4;display:flex;gap:8px;justify-content:center;flex-wrap:wrap}
     button,a.button{padding:10px 14px;border:0;border-radius:12px;font-size:16px;font-weight:600;cursor:pointer;background:#4f46e5;color:#fff;text-decoration:none}
     button.secondary{background:#374151}
-    /* hide any stray <video> elements that might overlay the canvas */
-    video { display:none !important; }
+
+    /* Let MindAR's own CSS handle the video. But ensure if video exists it fills the screen */
+    .mindar-video, video {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      z-index: 0; /* so canvas (z-index:1) draws on top */
+      touch-action: none;
+    }
   </style>
 </head>
 <body>
@@ -121,7 +133,6 @@
           mats.forEach(m=>{
             m.side = THREE.DoubleSide;
             if('toneMapped' in m) m.toneMapped = true;
-            // if the material is black, we keep it — changing materials may break textures
           });
         }
       });
@@ -171,7 +182,6 @@
       rescuePreview = modelPrefab.clone(true);
       centerByBounds(rescuePreview);
       fitByBounds(rescuePreview, FIT_MODE, FIT_SIZE_M);
-      // try the rotation fix in preview so you can validate orientation
       rescuePreview.rotation.set(ROT_FIX.x, ROT_FIX.y, ROT_FIX.z);
       rescuePreview.position.set(0, -0.05, -0.8);
       camera.add(rescuePreview);
@@ -236,14 +246,14 @@
         hint.textContent = 'Scan the image target…';
         updateDebug(`model: ${modelPrefab?'loaded':'idle'} (three ${THREE.REVISION})`);
       }catch(e){
-        console.error(e);
+        console.error('mindar.start() error:', e);
         startBtn.disabled = false; startBtn.textContent = 'Start AR (Retry)';
         hint.textContent = 'Start failed — check camera permission';
       }
     });
 
     restartBtn.addEventListener('click', async ()=>{
-      try { await mindar.stop(); } catch {}
+      try { await mindar.stop(); } catch (err) { console.warn('stop error', err); }
       renderer.setAnimationLoop(null);
       // clear anchor children (keeps anchor.group reference)
       while(anchor.group.children.length) anchor.group.remove(anchor.group.children[0]);
@@ -273,6 +283,7 @@
     console.log('%cWebAR debug helper loaded','color:cyan;font-weight:700');
     console.log('Make sure: 1) model.glb and targets.mind are in the same folder as this HTML file');
     console.log('2) You run via local server (file:// usually blocks requests).');
+    console.log('If camera remains black: check the console for camera permission or getUserMedia errors.');
   </script>
 </body>
 </html>
